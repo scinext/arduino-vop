@@ -48,10 +48,12 @@ byte command_complete = 1;	// Did we finish getting the command?
 // -- Command definitions -----------------
 // ----------------------------------------
 // These are the possible commands 
-// you can issue.
+// you can issue. (never use 10! aka 0x0A, that's our end-of-command byte.)
 
 #define CMD_GET_IGNITION_STATE 11
-#define CMD_GET_LAST_IGNITION_CHANGE 12
+#define CMD_GET_LAST_IGNITION_CHANGE_SECONDS 12
+#define CMD_GET_LAST_IGNITION_CHANGE_MINUTES 13
+#define CMD_ECHO 14
 
 // ----------------------------------------
 // -- Error Definitions -------------------
@@ -85,8 +87,14 @@ unsigned long ignition_delta_time = 0;	// The time when the ignition was last ch
 
 void fillRequest() {
 
-	// We return result data depending on the command. It's two bytes. I call it in an int, but, it's two bytes anyway you pack it.
+	// We return result data depending on the command. 
+	// Sometimes we result in an int, we default this as true. If not, we set the bytes directly.
+	bool use_int = true;
 	unsigned int result_data = 0;
+
+	// Here's the two bytes we return (we pack the int in these if true above, otherwise, set them yourself.)
+	byte return_buffer[2];
+
 	
 	if (command_complete == 1) {
 		// -- Command handler.
@@ -99,9 +107,22 @@ void fillRequest() {
 					result_data = ignition_state;
 					break;
 
-				case CMD_GET_LAST_IGNITION_CHANGE:
+				case CMD_GET_LAST_IGNITION_CHANGE_SECONDS:
 					// This is simple too, we just want how long ago we changed the ignition.
-					result_data = ignitionChangedSecondsAgo();
+					// Get it in seconds here.
+					result_data = ignitionChangedLast(true);
+					break;
+
+				case CMD_GET_LAST_IGNITION_CHANGE_MINUTES:
+					// And we send false to get minutes here.
+					result_data = ignitionChangedLast(false);
+					break;
+
+				case CMD_ECHO:
+					// Simply echo back the bytes that were send in the parameters.
+					use_int = false;
+					return_buffer[0] = param_buffer[0];
+					return_buffer[1] = param_buffer[1];
 					break;
 
 				default:
@@ -124,16 +145,14 @@ void fillRequest() {
 
 	}
 
-	// Let's just echo back the command and params now.
-	// byte writer[] = {command,param_buffer[0],param_buffer[1]};
-
-	// Go ahead and convert that integer result_data down into a byte array.
+	// Go ahead and convert that integer result_data down into a byte array. (if we're saying we're using an int)
 	// http://stackoverflow.com/questions/3784263/converting-an-int-into-a-4-byte-char-array-c
-	byte intbuffer[2];
-	intbuffer[0] = (result_data >> 8) & 0xFF;
-	intbuffer[1] = result_data & 0xFF;
+	if (use_int) {
+		return_buffer[0] = (result_data >> 8) & 0xFF;
+		return_buffer[1] = result_data & 0xFF;
+	}
 
-	byte writer[] = {error_flag,command,intbuffer[0],intbuffer[1]};
+	byte writer[] = {error_flag,command,return_buffer[0],return_buffer[1]};
 	
 	Wire.write(writer,4);
 
@@ -235,12 +254,12 @@ void loop() {
 // -- debounceIgnition : Gracefully latch the state of the ignition.
 
 
-#define CHECK_IGNITION_MILLIS 250 	// We check for the ignition this many millis.
-#define CHECK_IGNITION_RETRIES 3 	// How many times in a row does the ignition have to match?
-
+// quasi-localized variables for debouncing.
+#define CHECK_IGNITION_MILLIS 50 				// We check for the ignition this many millis.
+#define CHECK_IGNITION_RETRIES 3 				// How many times in a row does the ignition have to match?
 unsigned long debounce_last_ignition_time = 0; 	// The last time we checked the ignition.
-byte debounce_last_ignition_state = 0;	// Our last ignition state
-byte debounce_counter_ignition = 0;		// How many times for the same ignition?
+byte debounce_last_ignition_state = 0;			// Our last ignition state
+byte debounce_counter_ignition = 0;				// How many times for the same ignition?
 
 void debounceIgnition() {
 
@@ -252,7 +271,7 @@ void debounceIgnition() {
 	unsigned long now = millis();
 
 	// Is it time for a check?
-	if ((debounce_last_ignition_time + CHECK_IGNITION_MILLIS) < now) {
+	if ((debounce_last_ignition_time + CHECK_IGNITION_MILLIS) <= now) {
 
 		// Read it's state.
 		byte now_ignition = byte(digitalRead(PIN_IGNITION));
@@ -260,10 +279,10 @@ void debounceIgnition() {
 		// Is that the same as our last read?
 		if (now_ignition == debounce_last_ignition_state) {
 
-			// That's good, we want to increment our same counter.
+			// That's good, we got the same value in a row -- we want to increment our same counter.
 			debounce_counter_ignition++;
 			
-			if (debounce_counter_ignition > CHECK_IGNITION_RETRIES) {
+			if (debounce_counter_ignition >= CHECK_IGNITION_RETRIES) {
 
 				// Reset the counter.
 				debounce_counter_ignition = 0;
@@ -275,11 +294,6 @@ void debounceIgnition() {
 					ignition_state = now_ignition;
 					// Now let's store what time we did this.
 					ignition_delta_time = millis();
-
-					if (DEBUG) {
-						Serial.println("Ignition changed, millis follows");
-						Serial.println(ignition_delta_time,DEC);
-					}
 
 				}
 			}
@@ -300,14 +314,19 @@ void debounceIgnition() {
 }
 
 // --------------------------------------------------------------------------------
-// -- ignitionChangedSecondsAgo : When did we change that?
+// -- ignitionChangedLast : When did we change that?
+// if "seconds" is true, then returns seconds.
+// else, if false, returns minutes.
 
-unsigned int ignitionChangedSecondsAgo() {
+unsigned int ignitionChangedLast(bool seconds) {
 	
 	long now = millis();
 	long last = ignition_delta_time;
 	long delta =  now - last;
 	delta = delta / 1000;
+	if (!seconds) {
+		delta = delta / 60;
+	}
 	
 	return (unsigned int)delta;
 
