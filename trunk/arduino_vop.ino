@@ -66,6 +66,12 @@ byte error_flag = 1; 	// Denotes an error
 #define ERR_COMMAND_INCOMPLETE 3
 
 
+// ----------------------------------------
+// -- Stateful Device Information ---------
+// ----------------------------------------
+
+byte ignition_state = 1; 				// 0 = off, 1 = on.
+unsigned long ignition_delta_time = 0;	// The time when the ignition was last changed.
 
 // ----------------------------------------
 // -- Result Buffer & Result varaibles ----
@@ -79,36 +85,36 @@ byte error_flag = 1; 	// Denotes an error
 
 void fillRequest() {
 
-	Serial.println("Filling request."); 
-
-	// Let's test with an int.
-	unsigned int result = 0;
+	// We return result data depending on the command. It's two bytes. I call it in an int, but, it's two bytes anyway you pack it.
+	unsigned int result_data = 0;
 	
 	if (command_complete == 1) {
 		// -- Command handler.
 		if (error_flag == 0) {
-			
+
 			// No error at this point.
 			switch (command) {
 				case CMD_GET_IGNITION_STATE:
-					result = 2600;
+					// Simple, send them the latched ignition state.
+					result_data = ignition_state;
 					break;
 
 				case CMD_GET_LAST_IGNITION_CHANGE:
-					result = 420;
+					// This is simple too, we just want how long ago we changed the ignition.
+					result_data = ignitionChangedSecondsAgo();
 					break;
 
 				default:
 					// Command is unknown.
-					result = 0;
+					result_data = 0;
 					error_flag = ERR_COMMAND_UNKNOWN;
 					break;
 			}
 
 		} else {
 			// Ok, there's an error here. We won't try to handle the command.
-			// Let's set the result to 0.
-			result = 0;
+			// Let's set the result_data to 0.
+			result_data = 0;
 		}
 	} else {
 
@@ -121,15 +127,14 @@ void fillRequest() {
 	// Let's just echo back the command and params now.
 	// byte writer[] = {command,param_buffer[0],param_buffer[1]};
 
-	// Go ahead and convert that integer result down into a byte array.
+	// Go ahead and convert that integer result_data down into a byte array.
 	// http://stackoverflow.com/questions/3784263/converting-an-int-into-a-4-byte-char-array-c
 	byte intbuffer[2];
-	intbuffer[0] = (result >> 8) & 0xFF;
-	intbuffer[1] = result & 0xFF;
+	intbuffer[0] = (result_data >> 8) & 0xFF;
+	intbuffer[1] = result_data & 0xFF;
 
 	byte writer[] = {error_flag,command,intbuffer[0],intbuffer[1]};
-
-
+	
 	Wire.write(writer,4);
 
 	// Now we have to reset errors, otherwise, we can get stuck.
@@ -137,9 +142,9 @@ void fillRequest() {
 
 }
 
-
 // --------------------------------------------------------------------------------
 // -- receiveData : Event to handle incoming data, e.g. commands from the master.
+// This really ammounts to a parser for incoming data.
 // The master will write us a 3-byte array, followed by an new-line (0x0A) character --> the master will make a request after sending 0x0A
 // The first byte is the command, the second two bytes are parameters (and the last is end-of-line)
 
@@ -177,6 +182,7 @@ void receiveData(int byteCount){
 						Serial.println(command_complete);
 					}
 				}
+				break;
 
 			default:
 				// If the buffer is not yet full, we're going to populate it.
@@ -185,7 +191,7 @@ void receiveData(int byteCount){
 					// Place a byte into the buffer with each read, and increment the index at which it is placed.
 					// We subtract one to account for the command at position 0.
 					param_buffer[buffer_index-1] = inbyte;
-
+					
 				} else {
 					// Not bueno. That's a buffer overflow.
 					error_flag = ERR_BUFFER_OVERFLOW;
@@ -208,29 +214,105 @@ void receiveData(int byteCount){
 // the heart of the matter, the loop routine.
 
 void loop() {
-	delay(2000);
-	//digitalWrite(PIN_RASPI_TRANSISTOR, HIGH);   // turn the LED on (HIGH is the voltage level)
-	digitalWrite(PIN_RASPI_RELAY, HIGH);   // turn the LED on (HIGH is the voltage level)
-	while(1) {
+	// !bang, you'll want to turn this back, nicely!
+	// digitalWrite(PIN_RASPI_RELAY, HIGH);   // turn the LED on (HIGH is the voltage level)
 
-		// ------------------------------------- Test LED flashing
-		digitalWrite(PIN_DEBUG_LED, HIGH);
-		delay(750);
-		digitalWrite(PIN_DEBUG_LED, LOW);
-		delay(750);
+	// ------------------------------------- Test LED flashing
+	/*
+	digitalWrite(PIN_DEBUG_LED, HIGH);
+	delay(750);
+	digitalWrite(PIN_DEBUG_LED, LOW);
+	delay(750);
+	*/
 
-		// Let's show the value of the ignition
-		// NOTE: Yo. This pin comes down slowly.
-		boolean ignition = digitalRead(PIN_IGNITION);
-
-		if (DEBUG) {
-			// Serial.println("Value of ignition"); 
-			// Serial.println(ignition); 
-		}
-    
-  	}
+	// Let's run our ignition debounce routine.
+	debounceIgnition();
+	// boolean ignition = digitalRead(PIN_IGNITION);
 
 }
+
+// --------------------------------------------------------------------------------
+// -- debounceIgnition : Gracefully latch the state of the ignition.
+
+
+#define CHECK_IGNITION_MILLIS 250 	// We check for the ignition this many millis.
+#define CHECK_IGNITION_RETRIES 3 	// How many times in a row does the ignition have to match?
+
+unsigned long debounce_last_ignition_time = 0; 	// The last time we checked the ignition.
+byte debounce_last_ignition_state = 0;	// Our last ignition state
+byte debounce_counter_ignition = 0;		// How many times for the same ignition?
+
+void debounceIgnition() {
+
+	// --
+	// NOTE: Yo. This pin comes down slowly.
+	// --
+
+	// Check what time it is....
+	unsigned long now = millis();
+
+	// Is it time for a check?
+	if ((debounce_last_ignition_time + CHECK_IGNITION_MILLIS) < now) {
+
+		// Read it's state.
+		byte now_ignition = byte(digitalRead(PIN_IGNITION));
+		
+		// Is that the same as our last read?
+		if (now_ignition == debounce_last_ignition_state) {
+
+			// That's good, we want to increment our same counter.
+			debounce_counter_ignition++;
+			
+			if (debounce_counter_ignition > CHECK_IGNITION_RETRIES) {
+
+				// Reset the counter.
+				debounce_counter_ignition = 0;
+
+				// Did it change from the latched state? We will latch the new value if so.
+				if (ignition_state != now_ignition) {
+
+					// Latched it.
+					ignition_state = now_ignition;
+					// Now let's store what time we did this.
+					ignition_delta_time = millis();
+
+					if (DEBUG) {
+						Serial.println("Ignition changed, millis follows");
+						Serial.println(ignition_delta_time,DEC);
+					}
+
+				}
+			}
+
+		} else {
+			// Looks like it's flapping.
+			// We need to reset our count.
+			debounce_counter_ignition = 0;
+		}
+
+		// Keep that last state.
+		debounce_last_ignition_state = now_ignition;
+		// And the last time we checked.
+		debounce_last_ignition_time = now;
+
+	}
+
+}
+
+// --------------------------------------------------------------------------------
+// -- ignitionChangedSecondsAgo : When did we change that?
+
+unsigned int ignitionChangedSecondsAgo() {
+	
+	long now = millis();
+	long last = ignition_delta_time;
+	long delta =  now - last;
+	delta = delta / 1000;
+	
+	return (unsigned int)delta;
+
+}
+
 
 // the infamous setup routine.
 void setup() {
@@ -244,16 +326,25 @@ void setup() {
 	// listen on the ignition, as input
 	pinMode(PIN_IGNITION, INPUT);
 
-	if (DEBUG) {
-	  Serial.begin(9600);
-	}
-
 	// Initialize i2c, give it the address, and the methods to call on it's events.
 	Wire.begin(I2C_ADDRESS);	
 	Wire.onReceive(receiveData);
 	Wire.onRequest(fillRequest);
 
+
+	if (DEBUG) {
+	  Serial.begin(9600);
+	  Serial.println("Application started.");
+	}
+
+
 	// Trying an init on the error flag.
 	error_flag = 0;
+	// and the ignition state.
+	ignition_state = 1;
+	// set the test to 0.
+	test = 0;
+
+	// ignition_delta_time = millis();
   
 }
