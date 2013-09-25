@@ -22,7 +22,6 @@
 
 #define PIN_RASPI_RELAY 3
 #define PIN_IGNITION 2
-#define PIN_RASPI_TRANSISTOR_REROUTE 7
 #define PIN_DEBUG_LED 13
 
 byte test = 1; 
@@ -31,8 +30,8 @@ byte test = 1;
 // -- Command Buffer & Command variables --
 // ----------------------------------------
 // -- How's a command sent?
-// Firstly, it's 4 bytes, first by is command, second and third are parameters, and fourth is 0x0A (end-of-line/new-line)
-// 1st Byte: The Command (has to be NON-0xA)
+// Firstly, it's 4 bytes, first byte is command, second and third are parameters, and fourth is 0x0A (end-of-line/new-line)
+// 1st Byte: The Command (has to be NON-0x0A)
 // 2nd Byte: First byte in parameters.
 // 3rd Byte: Second byte in parameters.
 // 4th Byte: 0x0A, the end of the command.
@@ -49,11 +48,25 @@ byte command_complete = 1;	// Did we finish getting the command?
 // ----------------------------------------
 // These are the possible commands 
 // you can issue. (never use 10! aka 0x0A, that's our end-of-command byte.)
+// (that's why it starts at 11 --> "turn it up to 11")
 
 #define CMD_GET_IGNITION_STATE 11
 #define CMD_GET_LAST_IGNITION_CHANGE_SECONDS 12
 #define CMD_GET_LAST_IGNITION_CHANGE_MINUTES 13
 #define CMD_ECHO 14
+#define CMD_PAT_WATCHDOG 15
+
+#define CMD_DEBUG_SET_IGN_DETECT 100
+#define CMD_DEBUG_SET_IGN_STATE 101
+#define CMD_DEBUG_GET_IGN_DETECT 102
+#define CMD_DEBUG_GET_TEST_VALUE 103
+
+// ----------------------------------------
+// -- Debug Variables ---------------------
+// ----------------------------------------
+
+byte debug_ign_debounce = 1;
+
 
 // ----------------------------------------
 // -- Error Definitions -------------------
@@ -72,14 +85,81 @@ byte error_flag = 1; 	// Denotes an error
 // -- Stateful Device Information ---------
 // ----------------------------------------
 
-byte ignition_state = 1; 				// 0 = off, 1 = on.
+bool ignition_state = false; 			// 0 = off, 1 = on.
 unsigned long ignition_delta_time = 0;	// The time when the ignition was last changed.
 
 // ----------------------------------------
-// -- Result Buffer & Result varaibles ----
+// -- Ignition Debounce Definition --------
 // ----------------------------------------
+// used in debounceIgnition()
+// defines the retry interval, and sequential successes to consider a digital pin change
+
+#define CHECK_IGNITION_INTERVAL 50 				// We check for the ignition this many millis.
+#define CHECK_IGNITION_RETRIES 3 				// How many times in a row does the ignition have to match?
 
 
+// ----------------------------------------
+// -- Watchdog Timer (WdT) Variables ------
+// ----------------------------------------
+// In watchdog mode, this micro waits for the raspi to stop sending watchdog pats, and then shuts it down.
+// In the positive case, when the ignition is off, it won't power it up until the ignition comes back on.
+// In the negative case, the ignition is still on, but no WdT pat is received -- it will just turn it off for a moment, and then back on.
+// I chose the term pat, as opposed to kick. It's just more polite: http://en.wikipedia.org/wiki/Watchdog_timer#Watchdog_restart
+
+bool watchdog_mode = true;						// When not in watchdog mode, turns off by request only.
+bool watchdog_shutdown_initiated = false;		// Are we going to shutdown? If we're in this mode, we're waiting to shutdown (interruptible by a pat)
+unsigned long watchdog_next_pat = 0;			// When's the last time they pet the dog?
+unsigned int watchdog_timeout_interval = 10;	// How long can we wait between pats? (SECONDS) If we don't see a pat in this long, we begin to shutdown power.
+unsigned int watchdog_turnoff_seconds = 60; 	// How long after the watchdog fails to turn it off?
+unsigned long watchdog_next_run = 0;			// When's the next time the watchdog will run?
+unsigned int watchdog_run_interval = 5;			// And this is how often it runs. (SECONDS)
+byte watchdog_state = 0;						// This is the current state of the watchdog.
+
+#define WATCHDOG_STATE_WATCHING 0
+#define WATCHDOG_STATE_SHUTDOWN 1
+
+// --------------------------------------------------------------------------
+// -- watchDog: Shutdown Raspberry Pi based on watch dog pats.
+// Who watches the watcher?
+
+void watchDog() {
+
+	// Only when watchdog mode is active.
+	if (watchdog_mode) {
+
+		// Let's only check this on an interval.
+		if ((unsigned long)(millis() - watchdog_next_run) >= (watchdog_run_interval*1000)) {
+		
+			// Depending on the state of the watchdog timer, we behave differently.
+			switch(watchdog_state) {
+
+				case WATCHDOG_STATE_WATCHING:
+					// So now, we see if we've missed a watchdog pat.
+					if ((unsigned long)(millis() - watchdog_next_pat) >= (watchdog_timeout_interval*1000)) {
+						// That looks like a missed watchdog.
+						test++;
+						// Now that we're missing watchdog timers. We need to know how long until we're going to shut 'er down.
+						// So we'll cascade another timer here.
+
+					}
+					break;
+
+			}
+
+			// And set the next time we'll look for this.
+			watchdog_next_run += watchdog_run_interval*1000;
+
+		}
+		
+	}
+
+}
+
+void resetWatchDog() {
+
+	watchdog_next_pat += millis() + watchdog_timeout_interval;
+
+}
 
 // --------------------------------------------------------------------------
 // -- fillRequest: What happens when there's a request from the i2c master.
@@ -125,6 +205,38 @@ void fillRequest() {
 					return_buffer[1] = param_buffer[1];
 					break;
 
+				case CMD_PAT_WATCHDOG:
+					// We just pat the dog, let's set his next runtime.
+					resetWatchDog();
+					break;
+
+				// --------------------- DEBUG METHODS
+
+					// Set the ignition detect according to the first param
+					case CMD_DEBUG_SET_IGN_DETECT:
+						debug_ign_debounce = param_buffer[0];
+						break;
+
+					// Set the ignition detect according to the first param
+					case CMD_DEBUG_SET_IGN_STATE:
+						if (ignition_state != param_buffer[0]) {
+							ignition_state = param_buffer[0];
+							ignition_delta_time = millis();
+						}
+						break;
+
+					// Set the ignition detect according to the first param
+					case CMD_DEBUG_GET_IGN_DETECT:
+						result_data = debug_ign_debounce;
+						break;
+
+					// Get the test value, usefully for debugging discrete values.
+					case CMD_DEBUG_GET_TEST_VALUE:
+						result_data = test;
+						break;
+					
+				// --------------------- end DEBUG METHODS
+
 				default:
 					// Command is unknown.
 					result_data = 0;
@@ -152,8 +264,10 @@ void fillRequest() {
 		return_buffer[1] = result_data & 0xFF;
 	}
 
+	// Gather together the instructions to send...
 	byte writer[] = {error_flag,command,return_buffer[0],return_buffer[1]};
-	
+
+	// And send it over the wire!	
 	Wire.write(writer,4);
 
 	// Now we have to reset errors, otherwise, we can get stuck.
@@ -245,7 +359,14 @@ void loop() {
 	*/
 
 	// Let's run our ignition debounce routine.
-	debounceIgnition();
+	if (debug_ign_debounce) {
+		debounceIgnition();
+	}
+
+	// Fire off the watchdog. (Method knows if it's active or not.)
+	watchDog();
+
+
 	// boolean ignition = digitalRead(PIN_IGNITION);
 
 }
@@ -253,28 +374,24 @@ void loop() {
 // --------------------------------------------------------------------------------
 // -- debounceIgnition : Gracefully latch the state of the ignition.
 
-
-// quasi-localized variables for debouncing.
-#define CHECK_IGNITION_MILLIS 50 				// We check for the ignition this many millis.
-#define CHECK_IGNITION_RETRIES 3 				// How many times in a row does the ignition have to match?
-unsigned long debounce_last_ignition_time = 0; 	// The last time we checked the ignition.
-byte debounce_last_ignition_state = 0;			// Our last ignition state
-byte debounce_counter_ignition = 0;				// How many times for the same ignition?
-
 void debounceIgnition() {
+
+	static unsigned long debounce_next_ignition_time = 0; 	// The last time we checked the ignition.
+	static byte debounce_last_ignition_state = 0;			// Our last ignition state
+	static byte debounce_counter_ignition = 0;				// How many times for the same ignition?
 
 	// --
 	// NOTE: Yo. This pin comes down slowly.
 	// --
 
-	// Check what time it is....
-	unsigned long now = millis();
+	// Rollover example from: http://www.baldengineer.com/blog/2012/07/16/arduino-how-do-you-reset-millis/
+	// if ((unsigned long)(millis() - waitUntil) >= interval)
 
 	// Is it time for a check?
-	if ((debounce_last_ignition_time + CHECK_IGNITION_MILLIS) <= now) {
+	if ((unsigned long)(millis() - debounce_next_ignition_time) >= CHECK_IGNITION_INTERVAL) {
 
 		// Read it's state.
-		byte now_ignition = byte(digitalRead(PIN_IGNITION));
+		bool now_ignition = digitalRead(PIN_IGNITION);
 		
 		// Is that the same as our last read?
 		if (now_ignition == debounce_last_ignition_state) {
@@ -306,8 +423,8 @@ void debounceIgnition() {
 
 		// Keep that last state.
 		debounce_last_ignition_state = now_ignition;
-		// And the last time we checked.
-		debounce_last_ignition_time = now;
+		// And the next time we check.
+		debounce_next_ignition_time += CHECK_IGNITION_INTERVAL;
 
 	}
 
@@ -360,9 +477,9 @@ void setup() {
 	// Trying an init on the error flag.
 	error_flag = 0;
 	// and the ignition state.
-	ignition_state = 1;
+	ignition_state = true;
 	// set the test to 0.
-	test = 0;
+	// test = 0;
 
 	// ignition_delta_time = millis();
   
