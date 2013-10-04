@@ -14,7 +14,7 @@
 #define I2C_ADDRESS 4
 
 // Turn this on for extra serial debug info.
-#define DEBUG false
+#define DEBUG true
 
 // ----------------------------------------
 // -- Pin Definitions!                   --
@@ -60,12 +60,13 @@ byte command_complete = 1;	// Did we finish getting the command?
 #define CMD_DEBUG_SET_IGN_STATE 101
 #define CMD_DEBUG_GET_IGN_DETECT 102
 #define CMD_DEBUG_GET_TEST_VALUE 103
+#define CMD_DEBUG_GET_WDT_STATE 104
 
 // ----------------------------------------
 // -- Debug Variables ---------------------
 // ----------------------------------------
 
-byte debug_ign_debounce = 1;
+byte debug_ign_debounce = 1;	// Turns off ignition detection, only useful for debugging.
 
 
 // ----------------------------------------
@@ -88,6 +89,10 @@ byte error_flag = 1; 	// Denotes an error
 bool ignition_state = false; 			// 0 = off, 1 = on.
 unsigned long ignition_delta_time = 0;	// The time when the ignition was last changed.
 
+
+bool raspberry_power = false;			// State of Raspberry Pi Power (0 = off, 1 = on)
+
+
 // ----------------------------------------
 // -- Ignition Debounce Definition --------
 // ----------------------------------------
@@ -106,17 +111,75 @@ unsigned long ignition_delta_time = 0;	// The time when the ignition was last ch
 // In the negative case, the ignition is still on, but no WdT pat is received -- it will just turn it off for a moment, and then back on.
 // I chose the term pat, as opposed to kick. It's just more polite: http://en.wikipedia.org/wiki/Watchdog_timer#Watchdog_restart
 
-bool watchdog_mode = true;						// When not in watchdog mode, turns off by request only.
-bool watchdog_shutdown_initiated = false;		// Are we going to shutdown? If we're in this mode, we're waiting to shutdown (interruptible by a pat)
-unsigned long watchdog_next_pat = 0;			// When's the last time they pet the dog?
-unsigned int watchdog_timeout_interval = 10;	// How long can we wait between pats? (SECONDS) If we don't see a pat in this long, we begin to shutdown power.
-unsigned int watchdog_turnoff_seconds = 60; 	// How long after the watchdog fails to turn it off?
-unsigned long watchdog_next_run = 0;			// When's the next time the watchdog will run?
-unsigned int watchdog_run_interval = 5;			// And this is how often it runs. (SECONDS)
-byte watchdog_state = 0;						// This is the current state of the watchdog.
-
 #define WATCHDOG_STATE_WATCHING 0
 #define WATCHDOG_STATE_SHUTDOWN 1
+#define WATCHDOG_STATE_BOOTING 2
+#define WATCHDOG_STATE_IDLE 3
+
+
+byte watchdog_state = WATCHDOG_STATE_IDLE;		// This is the current state of the watchdog.
+
+bool watchdog_mode = true;						// When not in watchdog mode, turns off by request only.
+bool watchdog_shutdown_initiated = false;		// Are we going to shutdown? If we're in this mode, we're waiting to shutdown (interruptible by a pat)
+
+unsigned long watchdog_last_pat = 0;			// When's the last time they pet the dog?
+unsigned int watchdog_timeout_interval = 10;	// How long can we wait between pats? (SECONDS) If we don't see a pat in this long, we begin to shutdown power.
+
+unsigned int watchdog_turnoff_interval = 30; 	// How long after the watchdog fails to turn it off?
+unsigned long watchdog_turnoff_time = 0;		// And the next time we turn off (set when it fails.)
+
+unsigned long watchdog_next_run = 0;			// When's the next time the watchdog will run?
+unsigned int watchdog_run_interval = 5;			// And this is how often it runs. (SECONDS)
+
+unsigned long watchdog_boot_time = 0;			// When's the time we mark a boot initiated?
+unsigned int watchdog_boot_interval = 60;		// How long do we give the raspberry pi to boot? (SECONDS)
+
+// ----------------------------------------
+// -- Power Timer Variables ---------------
+// ----------------------------------------
+
+unsigned int power_minimum_off_interval = 5;	// Minimum number of seconds the pi can be off (in order to reboot) (SECONDS)
+unsigned long power_minimum_off_time = 0;		// The time we turned it off.
+
+
+// --------------------------------------------------------------------------
+// -- bootUpHandler: Turns on the raspberry pi when necessary.
+
+void bootUpHandler() {
+
+	// If the raspberry pi is off...
+	if (!raspberry_power) {
+		// And the ignition is on...
+		if (ignition_state) {
+			// If we've been off for long enough (in the case of a reboot scenario, this is important.)
+			if ((unsigned long)(millis() - power_minimum_off_time) >= (power_minimum_off_interval*1000)) {
+				// Then we need to turn the raspberry pi on!
+				debugIt("Turning raspberry pi on!");
+				// Set the pin state, and turn on the relay.
+				digitalWrite(PIN_RASPI_RELAY, HIGH);
+				// And save it in our stateful variable.
+				raspberry_power = true;
+				// Now we tell the watchdog we're in a booting state.
+				watchdog_state = WATCHDOG_STATE_BOOTING;
+				// And we give it a grace period.
+				watchdog_boot_time = millis();
+			}
+		}
+	}
+
+}
+
+void shutDownHandler() {
+
+	debugIt("Shutting down raspberry pi.");
+	// Turn the raspberry pi off, at the relay.
+	digitalWrite(PIN_RASPI_RELAY, LOW);
+	// Note when we turned it off (in case we're rebooting, so we can have it off for a set period)
+	power_minimum_off_time = millis();
+	// And we note that we've turned it off in our stateful variables.
+	raspberry_power = false;
+
+}
 
 // --------------------------------------------------------------------------
 // -- watchDog: Shutdown Raspberry Pi based on watch dog pats.
@@ -135,13 +198,45 @@ void watchDog() {
 
 				case WATCHDOG_STATE_WATCHING:
 					// So now, we see if we've missed a watchdog pat.
-					if ((unsigned long)(millis() - watchdog_next_pat) >= (watchdog_timeout_interval*1000)) {
-						// That looks like a missed watchdog.
-						test++;
+					if ((unsigned long)(millis() - watchdog_last_pat) >= (watchdog_timeout_interval*1000)) {
+						// That looks like a missed watchdog pat.
+						debugIt("Watch dog pats failed, moving into shutdown mode.");
 						// Now that we're missing watchdog timers. We need to know how long until we're going to shut 'er down.
-						// So we'll cascade another timer here.
-
+						// So we'll cascade another timer here, the shutdown timer.
+						test++;
+						watchdog_state = WATCHDOG_STATE_SHUTDOWN;
+						// Set the time that timer will run, now.
+						watchdog_turnoff_time = millis(); // + (watchdog_turnoff_interval*1000);
 					}
+					break;
+
+				case WATCHDOG_STATE_SHUTDOWN:
+					if ((unsigned long)(millis() - watchdog_turnoff_time) >= (watchdog_turnoff_interval*1000)) {
+						test++;
+						// It's time to shut 'er down.
+						// So first we issue a shutdown, and set the watchdog state to be idle.
+						debugIt("Issuing shutdown due to watchdog pats.");
+						shutDownHandler();
+						watchdog_state = WATCHDOG_STATE_IDLE;
+					}
+					break;
+
+				case WATCHDOG_STATE_BOOTING:
+					// If the watchdog is booting.... we just stick around here.
+					// Waiting for a pat. When the pat is received, the watchdog is reset, and we're put into the "watching" state.
+					// But, eventually we have to timeout, and reset this mother.
+					if ((unsigned long)(millis() - watchdog_boot_time) >= (watchdog_boot_interval*1000)) {
+						// If we hit this, we haven't gotten a pat in the allowed boot time.
+						debugIt("Boot failed, no watch dog pats before allowed time, reboot starting (if ignition up)");
+						// So we issue a shutdown.
+						shutDownHandler();
+						// And we go idle.
+						watchdog_state = WATCHDOG_STATE_IDLE;
+					}
+					break;
+
+				case WATCHDOG_STATE_IDLE:
+					// We don't actually do anything, we... sit idle.
 					break;
 
 			}
@@ -157,7 +252,10 @@ void watchDog() {
 
 void resetWatchDog() {
 
-	watchdog_next_pat += millis() + watchdog_timeout_interval;
+	// Set the time we expect the next pat.
+	watchdog_last_pat = millis();
+	// And since the watchdog has been pat, we also reset the watchdog state (so that we either enable it now [in the case of booting], or cancel a shutdown [in the case of, yep, a shutdown])
+	watchdog_state = WATCHDOG_STATE_WATCHING;
 
 }
 
@@ -234,6 +332,10 @@ void fillRequest() {
 					case CMD_DEBUG_GET_TEST_VALUE:
 						result_data = test;
 						break;
+
+					case CMD_DEBUG_GET_WDT_STATE:
+						result_data = watchdog_state;
+						break;
 					
 				// --------------------- end DEBUG METHODS
 
@@ -292,11 +394,10 @@ void receiveData(int byteCount){
 		
 		// Always assume command is incomplete, mark complete only on receipt of end of command
 		command_complete = 0;
-		if (DEBUG) {
-			Serial.println("over set");
-			Serial.println(command_complete);
-		}
-
+		
+		// debugIt("over set");
+		// debugIt(command_complete);
+		
 		// What index are we reading?
 		switch (buffer_index) {
 
@@ -310,10 +411,9 @@ void receiveData(int byteCount){
 					// Let's note that we completely got the command.
 					command_complete = 1;
 					
-					if (DEBUG) {
-						Serial.println("inner set");
-						Serial.println(command_complete);
-					}
+					// debugIt("inner set");
+					// debugIt(command_complete);
+					
 				}
 				break;
 
@@ -365,6 +465,9 @@ void loop() {
 
 	// Fire off the watchdog. (Method knows if it's active or not.)
 	watchDog();
+
+	// Turn on the raspberry pi if application
+	bootUpHandler();
 
 
 	// boolean ignition = digitalRead(PIN_IGNITION);
@@ -470,17 +573,30 @@ void setup() {
 
 	if (DEBUG) {
 	  Serial.begin(9600);
-	  Serial.println("Application started.");
+	  debugIt("Application started.");
 	}
 
 
 	// Trying an init on the error flag.
 	error_flag = 0;
 	// and the ignition state.
-	ignition_state = true;
+	// ignition_state = true;
+
+
 	// set the test to 0.
 	// test = 0;
 
 	// ignition_delta_time = millis();
   
+}
+
+// --------------------------------------------------------------------------------
+// -- debugIt : Print a serial line if the debug parameter is set on.
+
+void debugIt(char *msg) {
+
+	if (DEBUG) {
+		Serial.println(msg);
+	}
+
 }
