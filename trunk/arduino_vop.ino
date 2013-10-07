@@ -123,7 +123,7 @@ bool watchdog_mode = true;						// When not in watchdog mode, turns off by reque
 bool watchdog_shutdown_initiated = false;		// Are we going to shutdown? If we're in this mode, we're waiting to shutdown (interruptible by a pat)
 
 unsigned long watchdog_last_pat = 0;			// When's the last time they pet the dog?
-unsigned int watchdog_timeout_interval = 10;	// How long can we wait between pats? (SECONDS) If we don't see a pat in this long, we begin to shutdown power.
+unsigned int watchdog_timeout_interval = 20;	// How long can we wait between pats? (SECONDS) If we don't see a pat in this long, we begin to shutdown power.
 
 unsigned int watchdog_turnoff_interval = 30; 	// How long after the watchdog fails to turn it off?
 unsigned long watchdog_turnoff_time = 0;		// And the next time we turn off (set when it fails.)
@@ -156,7 +156,7 @@ void bootUpHandler() {
 				// Then we need to turn the raspberry pi on!
 				debugIt("Turning raspberry pi on!");
 				// Set the pin state, and turn on the relay.
-				digitalWrite(PIN_RASPI_RELAY, HIGH);
+				digitalWrite(PIN_RASPI_RELAY, LOW);
 				// And save it in our stateful variable.
 				raspberry_power = true;
 				// Now we tell the watchdog we're in a booting state.
@@ -173,7 +173,7 @@ void shutDownHandler() {
 
 	debugIt("Shutting down raspberry pi.");
 	// Turn the raspberry pi off, at the relay.
-	digitalWrite(PIN_RASPI_RELAY, LOW);
+	digitalWrite(PIN_RASPI_RELAY, HIGH);
 	// Note when we turned it off (in case we're rebooting, so we can have it off for a set period)
 	power_minimum_off_time = millis();
 	// And we note that we've turned it off in our stateful variables.
@@ -558,6 +558,8 @@ void setup() {
 
 	// initialize the pin to turn the relay on, as an output.
 	pinMode(PIN_RASPI_RELAY, OUTPUT);
+	digitalWrite(PIN_RASPI_RELAY, HIGH);
+
 
 	// Here's our debug LED, it's an output.
 	pinMode(PIN_DEBUG_LED, OUTPUT);
