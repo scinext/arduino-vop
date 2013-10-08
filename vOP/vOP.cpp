@@ -310,37 +310,6 @@ void vOP::resetWatchDog() {
 }
 
 // --------------------------------------------------------------------------
-// -- WRAPPERS: MC Hammer & Doug E. Fresh
-// So, you can't use a call-back that's a member function.
-// So you're gonna have to wrap it up with a pointer.
-// Fairly good stack exchange answer led me to it: http://stackoverflow.com/questions/9027456/no-matching-function-error-when-using-attachinterrupt
-// And there's even more detail should you decide to induldge @ http://www.newty.de/fpt/callback.html#static
-
-/*
-void* point2receive;
-
-void vOP::receiveData_wrapper(int numBytes){
-   // explicitly cast to a pointer to Classname
-   vOP* mySelf = (vOP*) point2receive;
-
-   // call member
-   mySelf->receiveData(numBytes);
-}
-
-
-void* point2fill;
-
-void vOP::fillRequest_wrapper(){
-   // explicitly cast to a pointer to Classname
-   vOP* mySelf = (vOP*) point2fill;
-
-   // call member
-   mySelf->fillRequest();
-}
-*/
-
-
-// --------------------------------------------------------------------------
 // -- fillRequest: What happens when there's a request from the i2c master.
 // Which really means, handling the command that was read in receiveData()
 
@@ -654,3 +623,35 @@ void vOP::debugItDEC(byte msg) {
 	}
 
 }
+
+// ------------------------------- reference consider
+
+// --------------------------------------------------------------------------
+// -- WRAPPERS: MC Hammer & Doug E. Fresh
+// So, you can't use a call-back that's a member function.
+// So you're gonna have to wrap it up with a pointer.
+// Fairly good stack exchange answer led me to it: http://stackoverflow.com/questions/9027456/no-matching-function-error-when-using-attachinterrupt
+// And there's even more detail should you decide to induldge @ http://www.newty.de/fpt/callback.html#static
+
+/*
+void* point2receive;
+
+void vOP::receiveData_wrapper(int numBytes){
+   // explicitly cast to a pointer to Classname
+   vOP* mySelf = (vOP*) point2receive;
+
+   // call member
+   mySelf->receiveData(numBytes);
+}
+
+
+void* point2fill;
+
+void vOP::fillRequest_wrapper(){
+   // explicitly cast to a pointer to Classname
+   vOP* mySelf = (vOP*) point2fill;
+
+   // call member
+   mySelf->fillRequest();
+}
+*/
