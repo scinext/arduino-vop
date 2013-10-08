@@ -8,27 +8,18 @@
 	
 */
 
-// Use wire, i2c is rather important here. 
-#include <Wire.h>
-// Our i2c address.
-#define I2C_ADDRESS 4
 
-// Turn this on for extra serial debug info.
-#define DEBUG true
-
-// ----------------------------------------
-// -- Pin Definitions!                   --
-// ----------------------------------------
+// ------------------------------------------ -
+// -- Pin Definitions!                   --- -
+// ---------------------------------------- -
 
 #define PIN_RASPI_RELAY 3
 #define PIN_IGNITION 2
 #define PIN_DEBUG_LED 13
 
-byte test = 1; 
-
-// ----------------------------------------
-// -- Command Buffer & Command variables --
-// ----------------------------------------
+// ------------------------------------------ -
+// -- Command Buffer & Command variables --- -
+// ---------------------------------------- -
 // -- How's a command sent?
 // Firstly, it's 4 bytes, first byte is command, second and third are parameters, and fourth is 0x0A (end-of-line/new-line)
 // 1st Byte: The Command (has to be NON-0x0A)
@@ -39,13 +30,10 @@ byte test = 1;
 // What's the maximum index for the param buffer? (We count the command, plus two parameters, which is 3. Excludes the end of a command.)
 #define MAX_COMMAND_PARAMETERS 3
 #define END_OF_COMMAND 10
-byte command = 1;			// The issued command.
-byte param_buffer[2];		// The two posible bytes for the command parameters.
-byte command_complete = 1;	// Did we finish getting the command?
 
-// ----------------------------------------
-// -- Command definitions -----------------
-// ----------------------------------------
+// ------------------------------------------ -
+// -- Command definitions ------------------ -
+// ---------------------------------------- -
 // These are the possible commands 
 // you can issue. (never use 10! aka 0x0A, that's our end-of-command byte.)
 // (that's why it starts at 11 --> "turn it up to 11")
@@ -62,90 +50,149 @@ byte command_complete = 1;	// Did we finish getting the command?
 #define CMD_DEBUG_GET_TEST_VALUE 103
 #define CMD_DEBUG_GET_WDT_STATE 104
 
-// ----------------------------------------
-// -- Debug Variables ---------------------
-// ----------------------------------------
-
-byte debug_ign_debounce = 1;	// Turns off ignition detection, only useful for debugging.
-
-
-// ----------------------------------------
-// -- Error Definitions -------------------
-// ----------------------------------------
+// ------------------------------------------ -
+// -- Error Definitions -------------------- -
+// ---------------------------------------- -
 // Errors, they happen. 
 // We define the possibilities here.
-
-byte error_flag = 1; 	// Denotes an error
 
 #define ERR_BUFFER_OVERFLOW 1
 #define ERR_COMMAND_UNKNOWN 2
 #define ERR_COMMAND_INCOMPLETE 3
 
 
-// ----------------------------------------
-// -- Stateful Device Information ---------
-// ----------------------------------------
-
-bool ignition_state = false; 			// 0 = off, 1 = on.
-unsigned long ignition_delta_time = 0;	// The time when the ignition was last changed.
-
-
-bool raspberry_power = false;			// State of Raspberry Pi Power (0 = off, 1 = on)
-
-
-// ----------------------------------------
-// -- Ignition Debounce Definition --------
-// ----------------------------------------
+// ----------------------------------------- -
+// -- Ignition Debounce Definition -------- -
+// --------------------------------------- -
 // used in debounceIgnition()
 // defines the retry interval, and sequential successes to consider a digital pin change
 
 #define CHECK_IGNITION_INTERVAL 50 				// We check for the ignition this many millis.
 #define CHECK_IGNITION_RETRIES 3 				// How many times in a row does the ignition have to match?
 
-
-// ----------------------------------------
-// -- Watchdog Timer (WdT) Variables ------
-// ----------------------------------------
-// In watchdog mode, this micro waits for the raspi to stop sending watchdog pats, and then shuts it down.
-// In the positive case, when the ignition is off, it won't power it up until the ignition comes back on.
-// In the negative case, the ignition is still on, but no WdT pat is received -- it will just turn it off for a moment, and then back on.
-// I chose the term pat, as opposed to kick. It's just more polite: http://en.wikipedia.org/wiki/Watchdog_timer#Watchdog_restart
+// ----------------------------------------- -
+// -- WdT State Definitions --------------- -
+// --------------------------------------- -
 
 #define WATCHDOG_STATE_WATCHING 0
 #define WATCHDOG_STATE_SHUTDOWN 1
 #define WATCHDOG_STATE_BOOTING 2
 #define WATCHDOG_STATE_IDLE 3
 
+#define USE_DEBUG_MODE false
 
-byte watchdog_state = WATCHDOG_STATE_IDLE;		// This is the current state of the watchdog.
+// --------------------------------------------------------------------------
+// vOP::vOP : The constructor.
 
-bool watchdog_mode = true;						// When not in watchdog mode, turns off by request only.
-bool watchdog_shutdown_initiated = false;		// Are we going to shutdown? If we're in this mode, we're waiting to shutdown (interruptible by a pat)
+#include "vOP.h"
+#include "Arduino.h"
+#include <Wire.h>
 
-unsigned long watchdog_last_pat = 0;			// When's the last time they pet the dog?
-unsigned int watchdog_timeout_interval = 20;	// How long can we wait between pats? (SECONDS) If we don't see a pat in this long, we begin to shutdown power.
 
-unsigned int watchdog_turnoff_interval = 30; 	// How long after the watchdog fails to turn it off?
-unsigned long watchdog_turnoff_time = 0;		// And the next time we turn off (set when it fails.)
+vOP::vOP() {
 
-unsigned long watchdog_next_run = 0;			// When's the next time the watchdog will run?
-unsigned int watchdog_run_interval = 5;			// And this is how often it runs. (SECONDS)
+	// -- Over-arching variables. ------------------------------------------------------
+	// Our i2c address.
+	i2c_address = 4;
 
-unsigned long watchdog_boot_time = 0;			// When's the time we mark a boot initiated?
-unsigned int watchdog_boot_interval = 60;		// How long do we give the raspberry pi to boot? (SECONDS)
+	// Turn this on for extra serial debug info.
+	debug_mode = USE_DEBUG_MODE;
 
-// ----------------------------------------
-// -- Power Timer Variables ---------------
-// ----------------------------------------
+	// -- Debug Variables --------------------------------------------------------------
+	
+	debug_ign_debounce = 1;			// Turns off ignition detection, only useful for debugging.
+	test = 1;						// I keep a test variable around for development.
 
-unsigned int power_minimum_off_interval = 5;	// Minimum number of seconds the pi can be off (in order to reboot) (SECONDS)
-unsigned long power_minimum_off_time = 0;		// The time we turned it off.
+	// -- Error variables --------------------------------------------------------------
+	error_flag = 1; 	// Denotes an error
 
+
+	// -- Command and buffer variables -------------------------------------------------
+	command = 1;			// The issued command.
+	param_buffer[2];		// The two posible bytes for the command parameters.
+	command_complete = 1;	// Did we finish getting the command?
+
+	// -- Stateful Device Information ---------------------------------------------------
+	ignition_state = false; 			// 0 = off, 1 = on.
+	ignition_delta_time = 0;			// The time when the ignition was last changed.
+	raspberry_power = false;			// State of Raspberry Pi Power (0 = off, 1 = on)
+
+	// ----------------------------------------
+	// -- Watchdog Timer (WdT) Variables ------
+	// ----------------------------------------
+	// In watchdog mode, this micro waits for the raspi to stop sending watchdog pats, and then shuts it down.
+	// In the positive case, when the ignition is off, it won't power it up until the ignition comes back on.
+	// In the negative case, the ignition is still on, but no WdT pat is received -- it will just turn it off for a moment, and then back on.
+	// I chose the term pat, as opposed to kick. It's just more polite: http://en.wikipedia.org/wiki/Watchdog_timer#Watchdog_restart
+
+	watchdog_state = WATCHDOG_STATE_IDLE;		// This is the current state of the watchdog.
+
+	watchdog_mode = true;						// When not in watchdog mode, turns off by request only.
+	watchdog_shutdown_initiated = false;		// Are we going to shutdown? If we're in this mode, we're waiting to shutdown (interruptible by a pat)
+
+	watchdog_last_pat = 0;						// When's the last time they pet the dog?
+	watchdog_timeout_interval = 20;				// How long can we wait between pats? (SECONDS) If we don't see a pat in this long, we begin to shutdown power.
+
+	watchdog_turnoff_interval = 30; 			// How long after the watchdog fails to turn it off?
+	watchdog_turnoff_time = 0;					// And the next time we turn off (set when it fails.)
+
+	watchdog_next_run = 0;						// When's the next time the watchdog will run?
+	watchdog_run_interval = 5;					// And this is how often it runs. (SECONDS)
+
+	watchdog_boot_time = 0;						// When's the time we mark a boot initiated?
+	watchdog_boot_interval = 60;				// How long do we give the raspberry pi to boot? (SECONDS)
+
+	// ------------------------------------------ -
+	// -- Power Timer Variables ---------------- -
+	// ---------------------------------------- -
+
+	power_minimum_off_interval = 5;	// Minimum number of seconds the pi can be off (in order to reboot) (SECONDS)
+	power_minimum_off_time = 0;		// The time we turned it off.
+
+	// ------------ and from the original setup
+
+	// initialize the pin to turn the relay on, as an output.
+	pinMode(PIN_RASPI_RELAY, OUTPUT);
+	digitalWrite(PIN_RASPI_RELAY, HIGH);
+
+
+	// Here's our debug LED, it's an output.
+	pinMode(PIN_DEBUG_LED, OUTPUT);
+
+	// listen on the ignition, as input
+	pinMode(PIN_IGNITION, INPUT);
+
+	// Initialize i2c, give it the address, and the methods to call on it's events.
+
+	/*
+	Wire.begin(i2c_address);	
+	Wire.onReceive(receiveData_wrapper);
+	Wire.onRequest(fillRequest_wrapper);
+	*/
+
+
+	if (debug_mode) {
+	  Serial.begin(9600);
+	  debugIt("Application started.");
+	}
+
+	// Trying an init on the error flag.
+	error_flag = 0;
+	// and the ignition state.
+	// ignition_state = true;
+
+
+	// set the test to 0.
+	// test = 0;
+
+	// ignition_delta_time = millis();
+
+}
 
 // --------------------------------------------------------------------------
 // -- bootUpHandler: Turns on the raspberry pi when necessary.
 
-void bootUpHandler() {
+void vOP::bootUpHandler() {
 
 	// If the raspberry pi is off...
 	if (!raspberry_power) {
@@ -169,7 +216,7 @@ void bootUpHandler() {
 
 }
 
-void shutDownHandler() {
+void vOP::shutDownHandler() {
 
 	debugIt("Shutting down raspberry pi.");
 	// Turn the raspberry pi off, at the relay.
@@ -185,13 +232,16 @@ void shutDownHandler() {
 // -- watchDog: Shutdown Raspberry Pi based on watch dog pats.
 // Who watches the watcher?
 
-void watchDog() {
+void vOP::watchDog() {
 
 	// Only when watchdog mode is active.
 	if (watchdog_mode) {
 
 		// Let's only check this on an interval.
 		if ((unsigned long)(millis() - watchdog_next_run) >= (watchdog_run_interval*1000)) {
+
+			debugIt("checkin state.");
+			debugItDEC(watchdog_state);
 		
 			// Depending on the state of the watchdog timer, we behave differently.
 			switch(watchdog_state) {
@@ -250,7 +300,7 @@ void watchDog() {
 
 }
 
-void resetWatchDog() {
+void vOP::resetWatchDog() {
 
 	// Set the time we expect the next pat.
 	watchdog_last_pat = millis();
@@ -260,10 +310,41 @@ void resetWatchDog() {
 }
 
 // --------------------------------------------------------------------------
+// -- WRAPPERS: MC Hammer & Doug E. Fresh
+// So, you can't use a call-back that's a member function.
+// So you're gonna have to wrap it up with a pointer.
+// Fairly good stack exchange answer led me to it: http://stackoverflow.com/questions/9027456/no-matching-function-error-when-using-attachinterrupt
+// And there's even more detail should you decide to induldge @ http://www.newty.de/fpt/callback.html#static
+
+/*
+void* point2receive;
+
+void vOP::receiveData_wrapper(int numBytes){
+   // explicitly cast to a pointer to Classname
+   vOP* mySelf = (vOP*) point2receive;
+
+   // call member
+   mySelf->receiveData(numBytes);
+}
+
+
+void* point2fill;
+
+void vOP::fillRequest_wrapper(){
+   // explicitly cast to a pointer to Classname
+   vOP* mySelf = (vOP*) point2fill;
+
+   // call member
+   mySelf->fillRequest();
+}
+*/
+
+
+// --------------------------------------------------------------------------
 // -- fillRequest: What happens when there's a request from the i2c master.
 // Which really means, handling the command that was read in receiveData()
 
-void fillRequest() {
+void vOP::fillRequest() {
 
 	// We return result data depending on the command. 
 	// Sometimes we result in an int, we default this as true. If not, we set the bytes directly.
@@ -308,7 +389,7 @@ void fillRequest() {
 					resetWatchDog();
 					break;
 
-				// --------------------- DEBUG METHODS
+				// --------------------- debug_mode METHODS
 
 					// Set the ignition detect according to the first param
 					case CMD_DEBUG_SET_IGN_DETECT:
@@ -337,7 +418,7 @@ void fillRequest() {
 						result_data = watchdog_state;
 						break;
 					
-				// --------------------- end DEBUG METHODS
+				// --------------------- end debug_mode METHODS
 
 				default:
 					// Command is unknown.
@@ -383,7 +464,7 @@ void fillRequest() {
 // The master will write us a 3-byte array, followed by an new-line (0x0A) character --> the master will make a request after sending 0x0A
 // The first byte is the command, the second two bytes are parameters (and the last is end-of-line)
 
-void receiveData(int byteCount){
+void vOP::receiveData(int byteCount){
 
 	byte buffer_index = 0;	// The Index for writing to the buffer
 
@@ -446,7 +527,7 @@ void receiveData(int byteCount){
 
 // the heart of the matter, the loop routine.
 
-void loop() {
+void vOP::loop() {
 	// !bang, you'll want to turn this back, nicely!
 	// digitalWrite(PIN_RASPI_RELAY, HIGH);   // turn the LED on (HIGH is the voltage level)
 
@@ -477,7 +558,7 @@ void loop() {
 // --------------------------------------------------------------------------------
 // -- debounceIgnition : Gracefully latch the state of the ignition.
 
-void debounceIgnition() {
+void vOP::debounceIgnition() {
 
 	static unsigned long debounce_next_ignition_time = 0; 	// The last time we checked the ignition.
 	static byte debounce_last_ignition_state = 0;			// Our last ignition state
@@ -538,7 +619,7 @@ void debounceIgnition() {
 // if "seconds" is true, then returns seconds.
 // else, if false, returns minutes.
 
-unsigned int ignitionChangedLast(bool seconds) {
+unsigned int vOP::ignitionChangedLast(bool seconds) {
 	
 	long now = millis();
 	long last = ignition_delta_time;
@@ -554,51 +635,22 @@ unsigned int ignitionChangedLast(bool seconds) {
 
 
 // the infamous setup routine.
-void setup() {
-
-	// initialize the pin to turn the relay on, as an output.
-	pinMode(PIN_RASPI_RELAY, OUTPUT);
-	digitalWrite(PIN_RASPI_RELAY, HIGH);
-
-
-	// Here's our debug LED, it's an output.
-	pinMode(PIN_DEBUG_LED, OUTPUT);
-
-	// listen on the ignition, as input
-	pinMode(PIN_IGNITION, INPUT);
-
-	// Initialize i2c, give it the address, and the methods to call on it's events.
-	Wire.begin(I2C_ADDRESS);	
-	Wire.onReceive(receiveData);
-	Wire.onRequest(fillRequest);
-
-
-	if (DEBUG) {
-	  Serial.begin(9600);
-	  debugIt("Application started.");
-	}
-
-
-	// Trying an init on the error flag.
-	error_flag = 0;
-	// and the ignition state.
-	// ignition_state = true;
-
-
-	// set the test to 0.
-	// test = 0;
-
-	// ignition_delta_time = millis();
-  
-}
 
 // --------------------------------------------------------------------------------
 // -- debugIt : Print a serial line if the debug parameter is set on.
 
-void debugIt(char *msg) {
+void vOP::debugIt(char *msg) {
 
-	if (DEBUG) {
+	if (debug_mode) {
 		Serial.println(msg);
+	}
+
+}
+
+void vOP::debugItDEC(byte msg) {
+
+	if (debug_mode) {
+		Serial.println(msg,DEC);
 	}
 
 }
