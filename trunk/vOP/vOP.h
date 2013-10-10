@@ -7,16 +7,20 @@ class vOP {
   public:
     vOP();
     void loop();
+    void setup();
     void bootUpHandler();
     void shutDownHandler();
+    void shutdownRequestHandler();
     void watchDog();
     void resetWatchDog();
     void fillRequest();
     void receiveData(int byteCount);
+    unsigned int paramsToInt(byte a,byte b);
     void debounceIgnition();
     unsigned int ignitionChangedLast(bool seconds);
     void debugIt(char *msg);
     void debugItDEC(byte msg);
+    void debugItBIN(int msg);
   private:
   	// Our i2c address.
 	byte i2c_address;
@@ -62,6 +66,13 @@ class vOP {
 	// ----------------------------------------
 	// used in debounceIgnition()
 	// defines the retry interval, and sequential successes to consider a digital pin change
+
+	// ----------------------------------------
+	// -- Shutdown Request Variables ----------
+	// ----------------------------------------
+
+	bool shutdown_request_mode;
+	unsigned long shutdown_request_at;
 
 	// ----------------------------------------
 	// -- Watchdog Timer (WdT) Variables ------

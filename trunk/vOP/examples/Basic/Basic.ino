@@ -37,6 +37,19 @@ void loop() {
 void setup() {
 
 	// --------------------------------------------------------- 
+	// -- Your code here!! :)                                 --
+	// --------------------------------------------------------- 
+
+
+	// --------------------------------------------------------- 
+	// -- Setup routine.                                      --
+	// Some methods don't like to be run up on object         --
+	// instantiation, so we run them in setup                 --
+	// --------------------------------------------------------- 
+
+	vop.setup();
+
+	// --------------------------------------------------------- 
 	// -- Wire setup.                                         --
 	// Go ahead and begin on the address of your choosing.    --
 	// And then call a wrapper to access the library's        --
@@ -47,9 +60,7 @@ void setup() {
 	Wire.onReceive(receiveWrapper);
 	Wire.onRequest(requestWrapper);
 
-	// --------------------------------------------------------- 
-	// -- Your code here!! :)                                 --
-	// --------------------------------------------------------- 
+
 
 }
 
