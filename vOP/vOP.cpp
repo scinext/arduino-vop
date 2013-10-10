@@ -43,6 +43,12 @@
 #define CMD_GET_LAST_IGNITION_CHANGE_MINUTES 13
 #define CMD_ECHO 14
 #define CMD_PAT_WATCHDOG 15
+#define CMD_SET_WATCHDOG 16
+#define CMD_GET_WATCHDOG 17
+#define CMD_REQUEST_SHUTDOWN_SECONDS 18
+#define CMD_REQUEST_SHUTDOWN_MINUTES 19
+#define CMD_GET_SHUTDOWN_STATE 20
+#define CMD_CANCEL_SHUTDOWN 21
 
 #define CMD_DEBUG_SET_IGN_DETECT 100
 #define CMD_DEBUG_SET_IGN_STATE 101
@@ -104,7 +110,7 @@ vOP::vOP() {
 	test = 1;						// I keep a test variable around for development.
 
 	// -- Error variables --------------------------------------------------------------
-	error_flag = 1; 	// Denotes an error
+	error_flag = 0; 	// Denotes an error
 
 
 	// -- Command and buffer variables -------------------------------------------------
@@ -116,6 +122,10 @@ vOP::vOP() {
 	ignition_state = false; 			// 0 = off, 1 = on.
 	ignition_delta_time = 0;			// The time when the ignition was last changed.
 	raspberry_power = false;			// State of Raspberry Pi Power (0 = off, 1 = on)
+
+	// -- Shutdown request variables ---------------------------------------------------
+	shutdown_request_mode = false;
+	shutdown_request_at = 0;
 
 	// ----------------------------------------
 	// -- Watchdog Timer (WdT) Variables ------
@@ -149,7 +159,9 @@ vOP::vOP() {
 	power_minimum_off_interval = 5;	// Minimum number of seconds the pi can be off (in order to reboot) (SECONDS)
 	power_minimum_off_time = 0;		// The time we turned it off.
 
-	// ------------ and from the original setup
+}
+
+void vOP::setup() {
 
 	// initialize the pin to turn the relay on, as an output.
 	pinMode(PIN_RASPI_RELAY, OUTPUT);
@@ -176,16 +188,21 @@ vOP::vOP() {
 	  debugIt("Application started.");
 	}
 
-	// Trying an init on the error flag.
-	error_flag = 0;
-	// and the ignition state.
-	// ignition_state = true;
+}
 
+void vOP::shutdownRequestHandler() {
 
-	// set the test to 0.
-	// test = 0;
+	if (shutdown_request_mode) {
 
-	// ignition_delta_time = millis();
+		if (millis() > shutdown_request_at) {
+			// Perform a shutdown.
+			debugIt("Performing requested shutdown.");
+			shutdown_request_mode = false;
+			shutdown_request_at = false;
+			shutDownHandler();
+		}
+
+	}
 
 }
 
@@ -240,8 +257,10 @@ void vOP::watchDog() {
 		// Let's only check this on an interval.
 		if ((unsigned long)(millis() - watchdog_next_run) >= (watchdog_run_interval*1000)) {
 
+			/*
 			debugIt("checkin state.");
 			debugItDEC(watchdog_state);
+			*/
 		
 			// Depending on the state of the watchdog timer, we behave differently.
 			switch(watchdog_state) {
@@ -323,6 +342,9 @@ void vOP::fillRequest() {
 	// Here's the two bytes we return (we pack the int in these if true above, otherwise, set them yourself.)
 	byte return_buffer[2];
 
+	// An integer for processing param data, should you to keep an int value from the passed parameters.
+	unsigned int param_data = 0;
+
 	
 	if (command_complete == 1) {
 		// -- Command handler.
@@ -356,6 +378,42 @@ void vOP::fillRequest() {
 				case CMD_PAT_WATCHDOG:
 					// We just pat the dog, let's set his next runtime.
 					resetWatchDog();
+					break;
+
+				case CMD_SET_WATCHDOG:
+					// Set the watchdog on or off.
+					watchdog_mode = param_buffer[1];
+					break;
+
+				case CMD_GET_WATCHDOG:
+					// Return the watchdog MODE.
+					result_data = watchdog_mode;
+					break;
+
+				case CMD_REQUEST_SHUTDOWN_SECONDS:
+					// Request a shutdown in N seconds.
+					param_data = paramsToInt(param_buffer[0],param_buffer[1]);
+					shutdown_request_at = millis() + (unsigned long)((unsigned long)param_data*1000);
+					shutdown_request_mode = true;
+					break;
+
+				case CMD_REQUEST_SHUTDOWN_MINUTES:
+					// Request a shutdown in N minutes.
+					param_data = paramsToInt(param_buffer[0],param_buffer[1]);
+					shutdown_request_at = millis() + (unsigned long)(((unsigned long)param_data*60)*1000);
+					// Serial.println(shutdown_request_at,DEC);
+					shutdown_request_mode = true;
+					break;
+
+				case CMD_GET_SHUTDOWN_STATE:
+					// Simply return the state of the shutdown.
+					result_data = shutdown_request_mode;
+					break;
+
+				case CMD_CANCEL_SHUTDOWN:
+					// Cancel a shutdown that's in progress.
+					shutdown_request_mode = false;
+					shutdown_request_at = 0;
 					break;
 
 				// --------------------- debug_mode METHODS
@@ -424,6 +482,15 @@ void vOP::fillRequest() {
 
 	// Now we have to reset errors, otherwise, we can get stuck.
 	error_flag = 0;
+
+}
+
+unsigned int vOP::paramsToInt(byte a,byte b) {
+
+	unsigned int returnval = 0;
+	returnval = (returnval << 8) + b;
+	returnval = (returnval << 8) + a;
+	return returnval;
 
 }
 
@@ -515,6 +582,9 @@ void vOP::loop() {
 
 	// Fire off the watchdog. (Method knows if it's active or not.)
 	watchDog();
+
+	// Process the shutdown requests, if necessary (it knows if it's active or not, too)
+	shutdownRequestHandler();
 
 	// Turn on the raspberry pi if application
 	bootUpHandler();
@@ -617,6 +687,14 @@ void vOP::debugIt(char *msg) {
 }
 
 void vOP::debugItDEC(byte msg) {
+
+	if (debug_mode) {
+		Serial.println(msg,DEC);
+	}
+
+}
+
+void vOP::debugItBIN(int msg) {
 
 	if (debug_mode) {
 		Serial.println(msg,DEC);
