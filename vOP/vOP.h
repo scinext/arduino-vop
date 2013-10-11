@@ -25,9 +25,6 @@ class vOP {
   	// Our i2c address.
 	byte i2c_address;
 
-	// Turn this on for extra serial debug info.
-	bool debug_mode;
-
 	// Just a test variable.
 	byte test;
 	byte error_flag;

@@ -85,7 +85,7 @@
 #define WATCHDOG_STATE_BOOTING 2
 #define WATCHDOG_STATE_IDLE 3
 
-#define USE_DEBUG_MODE false
+#define SERIAL_ON 0
 
 // --------------------------------------------------------------------------
 // vOP::vOP : The constructor.
@@ -100,9 +100,6 @@ vOP::vOP() {
 	// -- Over-arching variables. ------------------------------------------------------
 	// Our i2c address.
 	i2c_address = 4;
-
-	// Turn this on for extra serial debug info.
-	debug_mode = USE_DEBUG_MODE;
 
 	// -- Debug Variables --------------------------------------------------------------
 	
@@ -183,10 +180,10 @@ void vOP::setup() {
 	*/
 
 
-	if (debug_mode) {
+#if SERIAL_ON > 0
 	  Serial.begin(9600);
 	  debugIt("Application started.");
-	}
+#endif
 
 }
 
@@ -416,7 +413,7 @@ void vOP::fillRequest() {
 					shutdown_request_at = 0;
 					break;
 
-				// --------------------- debug_mode METHODS
+				// --------------------- DEBUG METHODS
 
 					// Set the ignition detect according to the first param
 					case CMD_DEBUG_SET_IGN_DETECT:
@@ -445,7 +442,7 @@ void vOP::fillRequest() {
 						result_data = watchdog_state;
 						break;
 					
-				// --------------------- end debug_mode METHODS
+				// --------------------- end DEBUG METHODS
 
 				default:
 					// Command is unknown.
@@ -680,26 +677,26 @@ unsigned int vOP::ignitionChangedLast(bool seconds) {
 
 void vOP::debugIt(char *msg) {
 
-	if (debug_mode) {
+#if SERIAL_ON > 0
 		Serial.println(msg);
-	}
+#endif
 
 }
 
 void vOP::debugItDEC(byte msg) {
 
-	if (debug_mode) {
+#if SERIAL_ON > 0
 		Serial.println(msg,DEC);
-	}
+#endif 
 
 }
 
 void vOP::debugItBIN(int msg) {
 
-	if (debug_mode) {
+#if SERIAL_ON > 0
 		Serial.println(msg,DEC);
-	}
-
+#endif
+		
 }
 
 // ------------------------------- reference consider
